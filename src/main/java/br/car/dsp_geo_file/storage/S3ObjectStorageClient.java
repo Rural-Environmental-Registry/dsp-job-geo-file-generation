@@ -14,6 +14,7 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -53,7 +54,7 @@ public class S3ObjectStorageClient implements ObjectStorageClient {
     }
 
     @Override
-    public void put(String key, byte[] content, String contentType, Map<String, String> userMetadata) {
+    public void putFile(String key, Path file, String contentType, Map<String, String> userMetadata) {
         try {
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(bucket)
@@ -61,8 +62,8 @@ public class S3ObjectStorageClient implements ObjectStorageClient {
                     .contentType(contentType)
                     .metadata(userMetadata == null ? Map.of() : userMetadata)
                     .build();
-            s3Client.putObject(request, RequestBody.fromBytes(content));
-            log.info("Published {} ({} bytes) to bucket {}", key, content.length, bucket);
+            s3Client.putObject(request, RequestBody.fromFile(file));
+            log.info("Published {} ({} bytes) from staging to bucket {}", key, file.toFile().length(), bucket);
         } catch (RuntimeException ex) {
             throw new ObjectStorageException("Failed to publish " + key, ex);
         }

@@ -44,8 +44,11 @@ public class JobRunner implements CommandLineRunner {
                 .toJobParameters());
         long durationMs = System.currentTimeMillis() - startedAt;
 
-        log.info("Job {} finished with status={} in {} ms",
-                geoFileGenerationJob.getName(), execution.getStatus(), durationMs);
+        log.info("Job {} finished with status={} exitCode={} in {} ms",
+                geoFileGenerationJob.getName(),
+                execution.getStatus(),
+                execution.getExitStatus().getExitCode(),
+                durationMs);
         for (Throwable failure : execution.getAllFailureExceptions()) {
             log.error("Job {} failure: {}",
                     geoFileGenerationJob.getName(), failure.getMessage(), failure);
@@ -56,6 +59,28 @@ public class JobRunner implements CommandLineRunner {
                     step.getReadCount(),
                     step.getWriteCount(),
                     step.getCommitCount());
+        }
+        logPublishSummary(execution);
+    }
+
+    private void logPublishSummary(JobExecution execution) {
+        StepExecution generationStep = execution.getStepExecutions().stream()
+                .filter(step -> GeoFileGenerationJobConfig.GEO_FILE_GENERATION_STEP.equals(step.getStepName()))
+                .findFirst()
+                .orElse(null);
+        if (generationStep == null) {
+            return;
+        }
+
+        var context = generationStep.getExecutionContext();
+        var status = GeoFileGenerationExitStatusResolver.fromGenerationStepContext(context);
+        int totalFailures = context.getInt(GeoFileGenerationContextKeys.PUBLISH_CONFIG_FAILURES, 0)
+                + context.getInt(GeoFileGenerationContextKeys.PUBLISH_TRANSIENT_FAILURES, 0);
+
+        if (totalFailures > 0) {
+            log.error("[GEO_PUBLISH_SUMMARY] {}", status.getExitDescription());
+        } else {
+            log.info("[GEO_PUBLISH_SUMMARY] {}", status.getExitDescription());
         }
     }
 }

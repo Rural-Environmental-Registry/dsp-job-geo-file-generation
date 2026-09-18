@@ -1,20 +1,16 @@
 package br.car.dsp_geo_file.export;
 
-import java.time.Instant;
-
 /**
  * The result of one export. {@code featureCount} zero means the cut is empty and no object
- * should exist for it; {@code lastUpdate} is the newest feature timestamp, published as
- * user-metadata so the search endpoint can answer without the WFS.
+ * should exist for it.
  */
 public record GeneratedGeoFile(
         byte[] content,
-        long featureCount,
-        Instant lastUpdate
+        long featureCount
 ) {
 
     public static GeneratedGeoFile empty() {
-        return new GeneratedGeoFile(new byte[0], 0L, null);
+        return new GeneratedGeoFile(new byte[0], 0L);
     }
 
     public boolean isEmpty() {

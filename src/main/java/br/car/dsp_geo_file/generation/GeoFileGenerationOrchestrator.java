@@ -16,6 +16,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Map;
 
@@ -31,14 +36,19 @@ import java.util.Map;
 @Service
 public class GeoFileGenerationOrchestrator {
 
-    /** User-metadata carrying the newest feature timestamp; the backend reads it on HeadObject. */
-    public static final String LAST_UPDATE_METADATA = "last-update";
+    /** User-metadata with the PutObject instant; the backend shows it as last file generate. */
+    public static final String GENERATED_AT_METADATA = "generated-at";
+
+    private static final DateTimeFormatter GENERATED_AT_FORMAT = DateTimeFormatter
+            .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            .withZone(ZoneOffset.UTC);
 
     private final DownloadThemesService downloadThemesService;
     private final GeoFileExporterRegistry exporterRegistry;
     private final FeatureTableResolver featureTableResolver;
     private final TerritoryFeatureFilterBuilder filterBuilder;
     private final S3ObjectKeyBuilder keyBuilder;
+    private final LocalStagingService localStagingService;
     private final ObjectStorageClient objectStorageClient;
     private final JdbcTemplate geoTargetJdbcTemplate;
 
@@ -48,6 +58,7 @@ public class GeoFileGenerationOrchestrator {
             FeatureTableResolver featureTableResolver,
             TerritoryFeatureFilterBuilder filterBuilder,
             S3ObjectKeyBuilder keyBuilder,
+            LocalStagingService localStagingService,
             ObjectStorageClient objectStorageClient,
             @Qualifier("geoTargetJdbcTemplate") JdbcTemplate geoTargetJdbcTemplate) {
         this.downloadThemesService = downloadThemesService;
@@ -55,6 +66,7 @@ public class GeoFileGenerationOrchestrator {
         this.featureTableResolver = featureTableResolver;
         this.filterBuilder = filterBuilder;
         this.keyBuilder = keyBuilder;
+        this.localStagingService = localStagingService;
         this.objectStorageClient = objectStorageClient;
         this.geoTargetJdbcTemplate = geoTargetJdbcTemplate;
     }
@@ -62,7 +74,8 @@ public class GeoFileGenerationOrchestrator {
     public TerritoryPublishResult publish(Territory territory) {
         int published = 0;
         int emptied = 0;
-        int failed = 0;
+        int configFailures = 0;
+        int transientFailures = 0;
 
         for (DownloadThemeConfig theme : downloadThemesService.getEnabledThemes()) {
             if (theme.formats() == null) {
@@ -81,14 +94,22 @@ public class GeoFileGenerationOrchestrator {
                     } else {
                         emptied++;
                     }
+                } catch (IllegalStateException ex) {
+                    configFailures++;
+                    log.error("[GEO_PUBLISH_CONFIG_ERROR] territory={} level={} theme={} format={} "
+                                    + "exception={} message={}",
+                            territory.id(), territory.level(), theme.code(), format,
+                            ex.getClass().getSimpleName(), ex.getMessage(), ex);
                 } catch (RuntimeException ex) {
-                    failed++;
-                    log.error("Failed to publish territory={} theme={} format={}: {}",
-                            territory.id(), theme.code(), format, ex.getMessage(), ex);
+                    transientFailures++;
+                    log.error("[GEO_PUBLISH_FAILURE] territory={} level={} theme={} format={} "
+                                    + "exception={} message={}",
+                            territory.id(), territory.level(), theme.code(), format,
+                            ex.getClass().getSimpleName(), ex.getMessage(), ex);
                 }
             }
         }
-        return new TerritoryPublishResult(published, emptied, failed);
+        return new TerritoryPublishResult(published, emptied, configFailures, transientFailures);
     }
 
     /** True when an object was written, false when the cut is empty and the object was removed. */
@@ -97,43 +118,60 @@ public class GeoFileGenerationOrchestrator {
                                String format,
                                GeoFileExporter exporter) {
         String key = keyBuilder.build(format, territory, theme.code(), exporter.fileExtension());
-        GeneratedGeoFile file = exporter.generate(new GeoFileExportContext(
-                territory,
-                theme,
-                featureTableResolver.resolve(theme),
-                filterBuilder.build(theme, territory),
-                geoTargetJdbcTemplate
-        ));
+        Path stagingPath = localStagingService.resolvePath(key);
+        try {
+            GeneratedGeoFile file = exporter.writeToFile(new GeoFileExportContext(
+                    territory,
+                    theme,
+                    featureTableResolver.resolve(theme),
+                    filterBuilder.build(theme, territory),
+                    geoTargetJdbcTemplate
+            ), stagingPath);
 
-        if (file.isEmpty()) {
-            // No features left in the cut: a stale object would keep answering downloads
-            // the WFS itself would refuse.
-            if (objectStorageClient.head(key).isPresent()) {
-                objectStorageClient.delete(key);
+            if (file.isEmpty()) {
+                // No features left in the cut: a stale object would keep answering downloads
+                // the WFS itself would refuse.
+                if (objectStorageClient.head(key).isPresent()) {
+                    objectStorageClient.delete(key);
+                }
+                localStagingService.deleteQuietly(stagingPath);
+                return false;
             }
-            return false;
-        }
 
-        objectStorageClient.put(key, file.content(), exporter.contentType(), metadata(file));
-        return true;
+            try {
+                objectStorageClient.putFile(
+                        key, stagingPath, exporter.contentType(), generationMetadata());
+                return true;
+            } finally {
+                localStagingService.deleteQuietly(stagingPath);
+            }
+        } catch (IOException ex) {
+            localStagingService.deleteQuietly(stagingPath);
+            throw new RuntimeException("Failed to stage file for " + key, ex);
+        }
     }
 
-    private static Map<String, String> metadata(GeneratedGeoFile file) {
-        if (file.lastUpdate() == null) {
-            return Map.of();
-        }
-        return Map.of(LAST_UPDATE_METADATA, file.lastUpdate().toString());
+    private static Map<String, String> generationMetadata() {
+        return Map.of(GENERATED_AT_METADATA, GENERATED_AT_FORMAT.format(Instant.now()));
     }
 
     private static String normalize(String format) {
         return format == null ? null : format.trim().toLowerCase(Locale.ROOT);
     }
 
-    /** What happened for one territory; {@code failed} zero is what allows clearing the flag. */
-    public record TerritoryPublishResult(int published, int emptied, int failed) {
+    /** What happened for one territory; {@code failed() == 0} is what allows clearing the flag. */
+    public record TerritoryPublishResult(
+            int published,
+            int emptied,
+            int configFailures,
+            int transientFailures) {
+
+        public int failed() {
+            return configFailures + transientFailures;
+        }
 
         public boolean complete() {
-            return failed == 0;
+            return failed() == 0;
         }
     }
 }

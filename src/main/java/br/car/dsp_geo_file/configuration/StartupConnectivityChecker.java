@@ -22,14 +22,20 @@ import java.util.List;
 import java.util.Properties;
 
 /**
- * Checks all 3 datasources before beans are created, logs every status, then fails only after
- * reporting. Runs as ApplicationContextInitializer so Spring Batch JobRepository does not
- * connect first.
+ * Checks all 3 datasources and object storage before beans are created, logs every status, then
+ * fails only after reporting. Runs as ApplicationContextInitializer so Spring Batch JobRepository
+ * does not connect first.
+ *
+ * <p>Only the 3 datasources are fail-fast here (Spring Batch cannot even start without them).
+ * Object storage is logged but never blocks startup — a missing bucket or unreachable S3 is a
+ * recoverable condition the job already handles later via
+ * {@code batch.tasklet.ObjectStorageReadinessTasklet}, which skips generation for this run
+ * instead of crashing the container.
  */
-public class DatabaseConnectivityInitializer
+public class StartupConnectivityChecker
         implements ApplicationContextInitializer<ConfigurableApplicationContext> {
 
-    private static final Logger log = LoggerFactory.getLogger(DatabaseConnectivityInitializer.class);
+    private static final Logger log = LoggerFactory.getLogger(StartupConnectivityChecker.class);
     private static final int LOGIN_TIMEOUT_SECONDS = 5;
 
     @Override
@@ -69,7 +75,6 @@ public class DatabaseConnectivityInitializer
         }
 
         log.info("All 3 datasources are operational.");
-        logObjectStorageStatus(env);
     }
 
     private void logObjectStorageStatus(Environment env) {

@@ -67,8 +67,7 @@ public class FeatureTableResolver {
                 rs -> {
                     columns.add(new FeatureTable.FeatureColumn(
                             rs.getString("column_name"),
-                            "geometry".equalsIgnoreCase(rs.getString("udt_name"))
-                    ));
+                            rs.getString("udt_name")));
                 },
                 SCHEMA,
                 table);

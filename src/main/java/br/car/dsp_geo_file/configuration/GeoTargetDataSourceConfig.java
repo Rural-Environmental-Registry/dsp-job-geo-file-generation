@@ -8,8 +8,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 
@@ -45,12 +43,6 @@ public class GeoTargetDataSourceConfig {
     @Bean(name = "geoTargetDataSource")
     public DataSource geoTargetDataSource() {
         return new HikariDataSource(geoTargetHikariConfig());
-    }
-
-    @Bean(name = "geoTargetTransactionManager")
-    public PlatformTransactionManager geoTargetTransactionManager(
-            @Qualifier("geoTargetDataSource") DataSource geoTargetDataSource) {
-        return new DataSourceTransactionManager(geoTargetDataSource);
     }
 
     @Bean(name = "geoTargetJdbcTemplate")

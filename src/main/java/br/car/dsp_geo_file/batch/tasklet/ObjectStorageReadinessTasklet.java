@@ -1,12 +1,14 @@
 package br.car.dsp_geo_file.batch.tasklet;
 
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationContextKeys;
+import br.car.dsp_geo_file.batch.config.GeoFileGenerationExitCodes;
 import br.car.dsp_geo_file.storage.ObjectStorageClient;
 import br.car.dsp_geo_file.storage.ObjectStorageException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.StepContribution;
 import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.batch.core.step.tasklet.Tasklet;
+import org.springframework.batch.item.ExecutionContext;
 import org.springframework.batch.repeat.RepeatStatus;
 
 /**
@@ -29,23 +31,33 @@ public class ObjectStorageReadinessTasklet implements Tasklet {
 
     @Override
     public RepeatStatus execute(StepContribution contribution, ChunkContext chunkContext) {
-        boolean ready;
+        boolean ready = false;
+        String notReadyReason = null;
+        String notReadyDetail = null;
+
         try {
             ready = objectStorageClient.bucketExists();
             if (!ready) {
+                notReadyReason = GeoFileGenerationExitCodes.REASON_BUCKET_MISSING;
+                notReadyDetail = bucket;
                 log.error("Bucket '{}' does not exist — no file will be published. "
                         + "Create the bucket; the territorial flags stay on for the next run.", bucket);
             }
         } catch (ObjectStorageException ex) {
-            ready = false;
+            notReadyReason = GeoFileGenerationExitCodes.REASON_UNREACHABLE;
+            notReadyDetail = ex.getMessage();
             log.error("Object storage unreachable — no file will be published: {}", ex.getMessage(), ex);
         }
 
-        chunkContext.getStepContext()
+        ExecutionContext jobContext = chunkContext.getStepContext()
                 .getStepExecution()
                 .getJobExecution()
-                .getExecutionContext()
-                .put(GeoFileGenerationContextKeys.STORAGE_READY, ready);
+                .getExecutionContext();
+        jobContext.put(GeoFileGenerationContextKeys.STORAGE_READY, ready);
+        if (!ready) {
+            jobContext.put(GeoFileGenerationContextKeys.STORAGE_NOT_READY_REASON, notReadyReason);
+            jobContext.put(GeoFileGenerationContextKeys.STORAGE_NOT_READY_DETAIL, notReadyDetail);
+        }
 
         if (ready) {
             log.info("Bucket '{}' is reachable", bucket);

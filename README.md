@@ -1,102 +1,110 @@
 # rer-dsp-job-geo-file-generation
 
-> Este repositório é um dos módulos do **DSP (Data Sharing Platform)**, parte do ecossistema RER.
-> A documentação completa do projeto está em **[rer-dsp-docs](https://github.com/Rural-Environmental-Registry/rer-dsp-docs)**.
-> As informações abaixo tratam apenas deste módulo, não do projeto DSP como um todo.
+> This repository is one module of the **DSP (Data Sharing Platform)**, part of the RER ecosystem.
+> Full project documentation lives in **[rer-dsp-docs](https://github.com/Rural-Environmental-Registry/rer-dsp-docs)**.
+> The information below covers this module only, not the DSP project as a whole.
 
-## Qual parte do DSP este módulo é
+## Where this module fits in the DSP
 
 ```mermaid
 flowchart LR
     GeoDb[(dsp-geoserver-db)]
     DspDb[(dsp-db)]
     Job((rer-dsp-job-geo-file-generation))
-    Storage[(Object storage — API S3)]
+    Storage[(Object storage - S3 API)]
 
-    DspDb -- territórios pendentes --> Job
-    GeoDb -- feições --> Job
-    Job -- publica arquivos --> Storage
-    Job -- baixa a flag --> DspDb
+    DspDb -- pending territories --> Job
+    GeoDb -- features --> Job
+    Job -- publish files --> Storage
+    Job -- clear flag --> DspDb
 ```
 
-## Objetivo
+## Purpose
 
-Pré-gerar os arquivos de download territoriais (níveis 2 e 3) e publicá-los em um object
-storage com API S3, para que o backend não precise consultar o WFS a cada download.
+Pre-generate territorial download files (levels 2 and 3) and publish them to S3-compatible
+object storage so the backend does not need to query WFS on every download.
 
-## Como funciona
+## How it works
 
-1. A migração (`rer-dsp-job-data-migration`) liga `requires_s3_file_regeneration` nos
-   territórios que mudaram, apenas depois de terminar com sucesso.
-2. Este job lê os territórios pendentes em `dsp.territory_level_2` / `dsp.territory_level_3`.
-3. Para cada território, percorre os temas habilitados de `downloadThemesConfig.json` e os
-   formatos que cada tema declara.
-4. Exporta o arquivo lendo `dsp-geoserver-db` — a mesma base que o WFS lê, o que é o que
-   mantém o conteúdo equivalente.
-5. Publica em `{formato}/{nível}/{slug}_{tema}.{ext}` com o timestamp da feição mais recente
-   em user-metadata.
-6. Só quando todos os formatos habilitados do território foram publicados é que
-   `requires_s3_file_regeneration` volta a `false` e `last_generated_s3_file_at` é gravado.
-   Falha parcial mantém o território pendente para a próxima execução.
+1. Migration ([`rer-dsp-job-data-migration`](https://github.com/Rural-Environmental-Registry/rer-dsp-job-data-migration))
+   sets `requires_s3_file_regeneration` on changed territories, only after finishing successfully.
+2. This job reads pending territories from `dsp.territory_level_2` / `dsp.territory_level_3`.
+3. For each territory, it walks enabled themes from `downloadThemesConfig.json` and the
+   formats each theme declares.
+4. Exports the file by reading `dsp-geoserver-db` — the same database WFS reads, which keeps
+   content equivalent.
+5. Publishes at `{format}/{level}/{slug}_{theme}.{ext}` with `generated-at` (PutObject instant,
+   ISO UTC) in user metadata — the backend uses this as `lastFileGenerated`.
+6. Only when all enabled formats for the territory have been published does
+   `requires_s3_file_regeneration` go back to `false` and `last_generated_s3_file_at` get written.
+   Partial failure keeps the territory pending for the next run.
 
-Se o bucket não existir, o job registra o erro, não publica nada e termina sem falhar — as
-flags continuam ligadas e a próxima execução tenta de novo.
+If the bucket does not exist, the job logs the error, publishes nothing and exits without failing —
+flags stay on and the next run tries again.
 
-### Chave do objeto
+### Object key
 
-| Nível | Chave |
+| Level | Key |
 | ----- | ----- |
-| 2 | `{formato}/level-2/{slugNível2}_{codigoTema}.{ext}` |
-| 3 | `{formato}/level-3/{slugNível2}_{slugNível3}_{codigoTema}.{ext}` |
+| 2 | `{format}/level-2/{level2Slug}_{themeCode}.{ext}` |
+| 3 | `{format}/level-3/{level2Slug}_{level3Slug}_{themeCode}.{ext}` |
 
-O slug vem de `name` (minúsculo, sem acento, resto virando hífen). O nível 3 leva o slug do
-pai porque homônimos entre pais são a regra. A API e as flags continuam usando `id`.
+The slug comes from `name` (lowercase, no accents, rest becomes hyphens). Level 3 includes the
+parent slug because homonyms across parents are common. The API and flags still use `id`.
 
-O nome que o cidadão baixa **não** é a chave do objeto: o backend continua montando
-`{tema}_{nível2}.{ext}`.
+The filename the end user downloads is **not** the object key: the backend still builds
+`{theme}_{level2}.{ext}`.
 
-### Formatos
+### Formats
 
-A v1 gera **CSV**, no mesmo formato que o WFS devolve (coluna `FID`, atributos na ordem da
-tabela, geometria em WKT). Um novo formato entra implementando `GeoFileExporter` e declarando
-o formato em `formats[]` do tema — a chave do objeto e os endpoints não mudam.
+v1 generates **CSV**, in the same format WFS returns (`FID` column, attributes in table order,
+geometry as WKT). A new format is added by implementing `GeoFileExporter` and declaring the
+format in the theme's `formats[]` — object keys and endpoints do not change.
 
-### Limpeza de órfãos
+### Orphan cleanup
 
-Ao final, o job lista `{formato}/level-2/` e `{formato}/level-3/` e apaga o que não
-corresponde a nenhum (território, tema, formato) existente. É assim que renomear um
-território deixa de servir o arquivo antigo.
+At the end, the job lists `{format}/level-2/` and `{format}/level-3/` and deletes anything that
+does not match an existing (territory, theme, format). That is how renaming a territory stops
+serving the old file.
 
-## Tecnologias
+## Technologies
 
 Java 21, Spring Boot 3.4.2, Spring Batch, PostgreSQL/PostGIS, AWS SDK v2 (S3), Maven.
 
-## Configuração
+## Configuration
 
-Três datasources (`batch`, `target`, `geo-target`) e o object storage:
+Three datasources (`batch`, `target`, `geo-target`) and object storage.
+
+The `batch` datasource points to schema **`geo_file_generation`** on `dsp-db` (Spring Batch metadata
+for this job). Schema `data_migration` is exclusive to the
+[migration job](https://github.com/Rural-Environmental-Registry/rer-dsp-job-data-migration).
 
 ```yaml
+spring:
+  datasource:
+    batch:
+      url: jdbc:postgresql://dsp-db:5432/dsp-db?currentSchema=geo_file_generation
 dsp:
   object-storage:
-    endpoint: http://storage:9000   # endpoint da API S3
+    endpoint: http://storage:9000   # S3 API endpoint
     region: us-east-1
-    bucket: dsp-geo-files           # precisa existir; o job não cria
+    bucket: dsp-geo-files           # must exist; the job does not create it
     access-key: ...
     secret-key: ...
     path-style-access: true
 ```
 
-O arquivo de runtime é gerado pelo `rer-dsp-core`
+The runtime file is generated by `rer-dsp-core`
 (`config/Job-Geo-File-Generation/application/application.yaml`).
 
-## Como executar
+## How to run
 
 ```bash
 ./mvnw spring-boot:run
 ```
 
-Ou, preferencialmente, via `rer-dsp-core` (`./setup.sh`), que orquestra a stack completa.
+Or, preferably, via `rer-dsp-core` (`./setup.sh`), which orchestrates the full stack.
 
-## Licença
+## License
 
 [GNU General Public License v3.0](LICENSE)

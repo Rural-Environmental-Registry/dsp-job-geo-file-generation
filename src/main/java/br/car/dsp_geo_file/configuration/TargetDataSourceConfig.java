@@ -8,8 +8,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 
@@ -44,12 +42,6 @@ public class TargetDataSourceConfig {
     @Bean(name = "targetDataSource")
     public DataSource targetDataSource() {
         return new HikariDataSource(targetHikariConfig());
-    }
-
-    @Bean(name = "targetTransactionManager")
-    public PlatformTransactionManager targetTransactionManager(
-            @Qualifier("targetDataSource") DataSource targetDataSource) {
-        return new DataSourceTransactionManager(targetDataSource);
     }
 
     @Bean(name = "targetJdbcTemplate")

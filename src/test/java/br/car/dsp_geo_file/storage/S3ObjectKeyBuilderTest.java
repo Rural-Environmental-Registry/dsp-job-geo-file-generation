@@ -64,6 +64,17 @@ class S3ObjectKeyBuilderTest {
     }
 
     @Test
+    void build_RejectsThemeCodeWithPathSeparator() {
+        Territory territory = new Territory(
+                TerritoryLevel.LEVEL_2, "35", "São Paulo", null, null);
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> keyBuilder.build("csv", territory, "area/of_interest", "csv"));
+        assertTrue(ex.getMessage().contains("Theme code"));
+    }
+
+    @Test
     void prefix_IsFormatThenLevel() {
         assertEquals("csv/level-2/", keyBuilder.prefix("csv", TerritoryLevel.LEVEL_2));
         assertEquals("csv/level-3/", keyBuilder.prefix("csv", TerritoryLevel.LEVEL_3));

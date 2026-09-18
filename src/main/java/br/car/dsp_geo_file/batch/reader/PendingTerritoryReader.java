@@ -16,6 +16,13 @@ import java.util.List;
  *
  * <p>Loads on the first read rather than at startup, so the object storage check runs before
  * the database is queried and a missing bucket costs nothing.
+ *
+ * <p>This bean is a singleton with mutable state ({@code pending}), which is only safe because
+ * {@code DspGeoFileGenerationApplication} runs the job exactly once and calls
+ * {@code System.exit} right after — one process, one execution. If this job ever becomes
+ * long-running (rescheduling executions without restarting the JVM), this reader must become
+ * {@code @StepScope} or reset {@code pending} explicitly between executions, or the second run
+ * will silently read zero territories (the exhausted iterator from the first run).
  */
 @Slf4j
 @Component

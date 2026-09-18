@@ -7,7 +7,7 @@ spring:
     web-application-type: none
   datasource:
     batch:
-      url: jdbc:postgresql://localhost:20654/dsp-db?currentSchema=data_migration
+      url: jdbc:postgresql://localhost:20654/dsp-db?currentSchema=geo_file_generation
       username: dsp
       password: dsp
       driver-class-name: org.postgresql.Driver
@@ -56,6 +56,7 @@ dsp:
 geo-file-generation:
   chunk-size: 1
   orphan-cleanup-enabled: true
+  staging-dir: /tmp/dsp-geo-files
 
 execution-jobs:
   geo-file-generation-job: true

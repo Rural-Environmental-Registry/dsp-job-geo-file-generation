@@ -25,11 +25,24 @@ public class S3ObjectKeyBuilder {
 
     private String fileName(Territory territory, String themeCode, String extension) {
         String slug = requireSlug(territory.slug(), "name", territory);
+        String safeThemeCode = requireSafeThemeCode(themeCode);
         if (territory.level() == TerritoryLevel.LEVEL_3) {
             String parentSlug = requireSlug(territory.parentSlug(), "parent name", territory);
-            return parentSlug + "_" + slug + "_" + themeCode + "." + extension;
+            return parentSlug + "_" + slug + "_" + safeThemeCode + "." + extension;
         }
-        return slug + "_" + themeCode + "." + extension;
+        return slug + "_" + safeThemeCode + "." + extension;
+    }
+
+    /**
+     * Theme codes come from the shared catalogue, not this repository — a stray {@code /} or
+     * {@code ..} there must not be able to reshape the object key's path.
+     */
+    private static String requireSafeThemeCode(String themeCode) {
+        if (themeCode == null || themeCode.isBlank() || !themeCode.matches("[A-Za-z0-9_-]+")) {
+            throw new IllegalStateException(
+                    "Theme code '" + themeCode + "' is not a valid object key segment");
+        }
+        return themeCode;
     }
 
     private static String requireSlug(String slug, String field, Territory territory) {

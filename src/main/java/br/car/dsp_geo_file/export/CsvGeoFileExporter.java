@@ -4,11 +4,16 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.Calendar;
 import java.util.StringJoiner;
+import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * CSV in the same shape the GeoServer WFS returns: an {@code FID} column built from the layer
@@ -16,6 +21,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>That shape is the contract: the endpoint falls back to the WFS when the object is missing,
  * and a citizen must not be able to tell which of the two answered.
+ *
+ * <p>Timestamp cells are UTC ISO-8601 with a literal {@code Z} and whole seconds
+ * ({@code 2026-08-18T18:43:48Z}), matching GeoServer Download {@code csvDateFormat}.
  */
 @Slf4j
 @Component
@@ -24,8 +32,10 @@ public class CsvGeoFileExporter implements GeoFileExporter {
     public static final String FORMAT = "csv";
 
     private static final String FID_HEADER = "FID";
-    private static final String LAST_UPDATE_COLUMN = "updated_at";
     private static final String LINE_SEPARATOR = "\r\n";
+    private static final DateTimeFormatter CSV_UTC = DateTimeFormatter
+            .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            .withZone(ZoneOffset.UTC);
 
     @Override
     public boolean supports(String format) {
@@ -46,13 +56,11 @@ public class CsvGeoFileExporter implements GeoFileExporter {
     public GeneratedGeoFile generate(GeoFileExportContext context) {
         FeatureTable table = context.featureTable();
         String featureIdPrefix = FeatureTableResolver.featureIdPrefix(context.theme().typeName());
-        boolean tracksLastUpdate = table.hasColumn(LAST_UPDATE_COLUMN);
 
         StringBuilder csv = new StringBuilder();
         csv.append(header(table)).append(LINE_SEPARATOR);
 
         AtomicLong featureCount = new AtomicLong();
-        AtomicReference<Instant> lastUpdate = new AtomicReference<>();
 
         context.geoTargetJdbcTemplate().query(
                 selectSql(table, context.filter()),
@@ -60,13 +68,10 @@ public class CsvGeoFileExporter implements GeoFileExporter {
                     StringJoiner line = new StringJoiner(",");
                     line.add(escape(featureIdPrefix + "." + resultSet.getString(table.primaryKeyColumn())));
                     for (FeatureTable.FeatureColumn column : table.columns()) {
-                        line.add(escape(resultSet.getString(column.name())));
+                        line.add(cell(column, resultSet));
                     }
                     csv.append(line).append(LINE_SEPARATOR);
                     featureCount.incrementAndGet();
-                    if (tracksLastUpdate) {
-                        trackLastUpdate(lastUpdate, resultSet.getTimestamp(LAST_UPDATE_COLUMN));
-                    }
                 },
                 context.filter().argsArray());
 
@@ -78,8 +83,7 @@ public class CsvGeoFileExporter implements GeoFileExporter {
                 context.territory().id(), context.theme().code(), featureCount.get());
         return new GeneratedGeoFile(
                 csv.toString().getBytes(StandardCharsets.UTF_8),
-                featureCount.get(),
-                lastUpdate.get());
+                featureCount.get());
     }
 
     private static String header(FeatureTable table) {
@@ -100,13 +104,32 @@ public class CsvGeoFileExporter implements GeoFileExporter {
         return "SELECT " + columns + " FROM " + table.qualifiedName() + " WHERE " + filter.sql();
     }
 
-    private static void trackLastUpdate(AtomicReference<Instant> lastUpdate, Timestamp value) {
-        if (value == null) {
-            return;
+    private static String cell(FeatureTable.FeatureColumn column, ResultSet resultSet) throws SQLException {
+        if (!column.timestamp()) {
+            return escape(resultSet.getString(column.name()));
         }
-        Instant candidate = value.toInstant();
-        lastUpdate.updateAndGet(current ->
-                current == null || candidate.isAfter(current) ? candidate : current);
+        return escape(formatUtc(resultSet, column.name()));
+    }
+
+    private static String formatUtc(ResultSet resultSet, String column) throws SQLException {
+        OffsetDateTime offsetDateTime = readOffsetDateTime(resultSet, column);
+        if (offsetDateTime != null) {
+            return CSV_UTC.format(offsetDateTime.toInstant());
+        }
+        Timestamp timestamp = resultSet.getTimestamp(
+                column, Calendar.getInstance(TimeZone.getTimeZone("UTC")));
+        if (timestamp == null) {
+            return "";
+        }
+        return CSV_UTC.format(timestamp.toInstant());
+    }
+
+    private static OffsetDateTime readOffsetDateTime(ResultSet resultSet, String column) {
+        try {
+            return resultSet.getObject(column, OffsetDateTime.class);
+        } catch (SQLException ignored) {
+            return null;
+        }
     }
 
     private static String escape(String value) {

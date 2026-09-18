@@ -1,2 +1,2 @@
 org.springframework.context.ApplicationContextInitializer=\
-br.car.dsp_geo_file.configuration.DatabaseConnectivityInitializer
+br.car.dsp_geo_file.configuration.StartupConnectivityChecker

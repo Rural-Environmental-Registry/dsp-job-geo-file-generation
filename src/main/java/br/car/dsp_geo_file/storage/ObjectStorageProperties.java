@@ -38,4 +38,14 @@ public class ObjectStorageProperties {
             throw new IllegalStateException("dsp.object-storage: '" + field + "' is required");
         }
     }
+
+    /** Explicit override so a future {@code @Data}/log-everything change can't leak the keys. */
+    @Override
+    public String toString() {
+        return "ObjectStorageProperties{endpoint=" + endpoint
+                + ", region=" + region
+                + ", bucket=" + bucket
+                + ", accessKey=****, secretKey=****"
+                + ", pathStyleAccess=" + pathStyleAccess + "}";
+    }
 }
