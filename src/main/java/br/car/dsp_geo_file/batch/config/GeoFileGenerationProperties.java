@@ -24,6 +24,16 @@ public class GeoFileGenerationProperties {
     private boolean orphanCleanupEnabled = true;
 
     /**
+     * Every N territories completed, logs {@code [GEO_GENERATION_PROGRESS]} with cumulative file counts.
+     */
+    private int progressLogEveryTerritories = 100;
+
+    /**
+     * When true, empty cuts log at INFO ({@code [GEO_FILE_EMPTY]}). Default DEBUG keeps volume down.
+     */
+    private boolean logEachFile = false;
+
+    /**
      * Local directory where files are written before S3 upload.
      * Subfolders mirror the object key.
      */

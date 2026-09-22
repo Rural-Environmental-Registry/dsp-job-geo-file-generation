@@ -21,6 +21,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -51,6 +52,7 @@ public class GeoFileGenerationOrchestrator {
     private final LocalStagingService localStagingService;
     private final ObjectStorageClient objectStorageClient;
     private final JdbcTemplate geoTargetJdbcTemplate;
+    private final GeoFileGenerationLogging generationLogging;
 
     public GeoFileGenerationOrchestrator(
             DownloadThemesService downloadThemesService,
@@ -60,7 +62,8 @@ public class GeoFileGenerationOrchestrator {
             S3ObjectKeyBuilder keyBuilder,
             LocalStagingService localStagingService,
             ObjectStorageClient objectStorageClient,
-            @Qualifier("geoTargetJdbcTemplate") JdbcTemplate geoTargetJdbcTemplate) {
+            @Qualifier("geoTargetJdbcTemplate") JdbcTemplate geoTargetJdbcTemplate,
+            GeoFileGenerationLogging generationLogging) {
         this.downloadThemesService = downloadThemesService;
         this.exporterRegistry = exporterRegistry;
         this.featureTableResolver = featureTableResolver;
@@ -69,13 +72,32 @@ public class GeoFileGenerationOrchestrator {
         this.localStagingService = localStagingService;
         this.objectStorageClient = objectStorageClient;
         this.geoTargetJdbcTemplate = geoTargetJdbcTemplate;
+        this.generationLogging = generationLogging;
     }
 
-    public TerritoryPublishResult publish(Territory territory) {
+    /** Pairs (theme, format) that this job exports, for progress denominators. */
+    public int exporterBackedFileCount() {
+        int count = 0;
+        for (DownloadThemeConfig theme : downloadThemesService.getEnabledThemes()) {
+            if (theme.formats() == null) {
+                continue;
+            }
+            for (String rawFormat : theme.formats()) {
+                if (exporterRegistry.find(normalize(rawFormat)).isPresent()) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    public TerritoryPublishResult publish(Territory territory, GeoFileGenerationRunProgress progress) {
         int published = 0;
         int emptied = 0;
         int configFailures = 0;
         int transientFailures = 0;
+        Map<String, Integer> publishedByFormat = new HashMap<>();
+        Map<String, Integer> emptiedByFormat = new HashMap<>();
 
         for (DownloadThemeConfig theme : downloadThemesService.getEnabledThemes()) {
             if (theme.formats() == null) {
@@ -88,35 +110,55 @@ public class GeoFileGenerationOrchestrator {
                     log.debug("No exporter for format={} (theme={}) — served by WFS", format, theme.code());
                     continue;
                 }
+                progress.advanceFile();
+                String key = keyBuilder.build(format, territory, theme.code(), exporter.get().fileExtension());
                 try {
-                    if (publishOne(territory, theme, format, exporter.get())) {
+                    PublishOutcome outcome = publishOne(territory, theme, format, exporter.get());
+                    if (outcome.published) {
                         published++;
+                        incrementFormat(publishedByFormat, format);
+                        generationLogging.logPublished(
+                                territory, theme.code(), format, key, outcome.featureCount, progress);
                     } else {
                         emptied++;
+                        incrementFormat(emptiedByFormat, format);
+                        generationLogging.logEmpty(territory, theme.code(), format, key, progress);
                     }
                 } catch (IllegalStateException ex) {
                     configFailures++;
-                    log.error("[GEO_PUBLISH_CONFIG_ERROR] territory={} level={} theme={} format={} "
-                                    + "exception={} message={}",
-                            territory.id(), territory.level(), theme.code(), format,
-                            ex.getClass().getSimpleName(), ex.getMessage(), ex);
+                    generationLogging.logConfigError(
+                            territory,
+                            theme.code(),
+                            format,
+                            progress,
+                            ex.getClass().getSimpleName(),
+                            ex.getMessage(),
+                            ex);
                 } catch (RuntimeException ex) {
                     transientFailures++;
-                    log.error("[GEO_PUBLISH_FAILURE] territory={} level={} theme={} format={} "
-                                    + "exception={} message={}",
-                            territory.id(), territory.level(), theme.code(), format,
-                            ex.getClass().getSimpleName(), ex.getMessage(), ex);
+                    generationLogging.logTransientFailure(
+                            territory,
+                            theme.code(),
+                            format,
+                            progress,
+                            ex.getClass().getSimpleName(),
+                            ex.getMessage(),
+                            ex);
                 }
             }
         }
-        return new TerritoryPublishResult(published, emptied, configFailures, transientFailures);
+        return new TerritoryPublishResult(
+                published, emptied, configFailures, transientFailures, publishedByFormat, emptiedByFormat);
     }
 
-    /** True when an object was written, false when the cut is empty and the object was removed. */
-    private boolean publishOne(Territory territory,
-                               DownloadThemeConfig theme,
-                               String format,
-                               GeoFileExporter exporter) {
+    private record PublishOutcome(boolean published, long featureCount) {
+    }
+
+    /** @return outcome with feature count when published */
+    private PublishOutcome publishOne(Territory territory,
+                                        DownloadThemeConfig theme,
+                                        String format,
+                                        GeoFileExporter exporter) {
         String key = keyBuilder.build(format, territory, theme.code(), exporter.fileExtension());
         Path stagingPath = localStagingService.resolvePath(key);
         try {
@@ -129,19 +171,17 @@ public class GeoFileGenerationOrchestrator {
             ), stagingPath);
 
             if (file.isEmpty()) {
-                // No features left in the cut: a stale object would keep answering downloads
-                // the WFS itself would refuse.
                 if (objectStorageClient.head(key).isPresent()) {
                     objectStorageClient.delete(key);
                 }
                 localStagingService.deleteQuietly(stagingPath);
-                return false;
+                return new PublishOutcome(false, 0L);
             }
 
             try {
                 objectStorageClient.putFile(
                         key, stagingPath, exporter.contentType(), generationMetadata());
-                return true;
+                return new PublishOutcome(true, file.featureCount());
             } finally {
                 localStagingService.deleteQuietly(stagingPath);
             }
@@ -149,6 +189,10 @@ public class GeoFileGenerationOrchestrator {
             localStagingService.deleteQuietly(stagingPath);
             throw new RuntimeException("Failed to stage file for " + key, ex);
         }
+    }
+
+    private static void incrementFormat(Map<String, Integer> counts, String format) {
+        counts.merge(format, 1, Integer::sum);
     }
 
     private static Map<String, String> generationMetadata() {
@@ -164,7 +208,18 @@ public class GeoFileGenerationOrchestrator {
             int published,
             int emptied,
             int configFailures,
-            int transientFailures) {
+            int transientFailures,
+            Map<String, Integer> publishedByFormat,
+            Map<String, Integer> emptiedByFormat) {
+
+        public TerritoryPublishResult {
+            publishedByFormat = publishedByFormat == null ? Map.of() : Map.copyOf(publishedByFormat);
+            emptiedByFormat = emptiedByFormat == null ? Map.of() : Map.copyOf(emptiedByFormat);
+        }
+
+        public TerritoryPublishResult(int published, int emptied, int configFailures, int transientFailures) {
+            this(published, emptied, configFailures, transientFailures, Map.of(), Map.of());
+        }
 
         public int failed() {
             return configFailures + transientFailures;
@@ -172,6 +227,10 @@ public class GeoFileGenerationOrchestrator {
 
         public boolean complete() {
             return failed() == 0;
+        }
+
+        public int filesProcessed() {
+            return published + emptied + failed();
         }
     }
 }

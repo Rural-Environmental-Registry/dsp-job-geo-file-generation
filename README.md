@@ -57,9 +57,16 @@ The filename the end user downloads is **not** the object key: the backend still
 
 ### Formats
 
-v1 generates **CSV**, in the same format WFS returns (`FID` column, attributes in table order,
-geometry as WKT). A new format is added by implementing `GeoFileExporter` and declaring the
-format in the theme's `formats[]` — object keys and endpoints do not change.
+**CSV** follows the WFS layout (`FID` column, attributes in table order, geometry as WKT).
+
+**GeoPackage** (`.gpkg`) is written when a theme lists `gpkg` in `formats[]`. One SQLite
+feature table per file, named after the theme code, geometry in `the_geom` (WKB from PostGIS).
+The SRID comes from the layer. When the cut has none, the geometry uses the GeoPackage undefined geographic SRS (`srs_id` 0) — the column cannot be null. Rows without
+geometry are skipped. There is no WFS fallback for this format: the backend serves the
+pre-generated object only.
+
+A further format is added by implementing `GeoFileExporter` and declaring it in the theme's
+`formats[]` — object keys and endpoints do not change.
 
 ### Orphan cleanup
 

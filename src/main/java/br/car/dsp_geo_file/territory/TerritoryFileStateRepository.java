@@ -26,6 +26,13 @@ public class TerritoryFileStateRepository {
         return query(level, true);
     }
 
+    /** Territories with {@code requires_s3_file_regeneration = true} at the given level. */
+    public int countPending(TerritoryLevel level) {
+        String sql = "SELECT COUNT(*) FROM " + level.table() + " t" + PENDING_CLAUSE;
+        Integer count = targetJdbcTemplate.queryForObject(sql, Integer.class);
+        return count == null ? 0 : count;
+    }
+
     /** Every territory of the level — the reference the orphan cleanup compares the bucket to. */
     public List<Territory> findAll(TerritoryLevel level) {
         return query(level, false);

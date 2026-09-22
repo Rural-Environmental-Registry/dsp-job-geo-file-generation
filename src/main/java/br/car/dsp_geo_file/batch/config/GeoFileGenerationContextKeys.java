@@ -11,6 +11,7 @@ public final class GeoFileGenerationContextKeys {
 
     public static final String FILES_PUBLISHED = "filesPublished";
     public static final String FILES_EMPTIED = "filesEmptied";
+    public static final String FILES_PROCESSED = "filesProcessed";
     public static final String TERRITORIES_COMPLETED = "territoriesCompleted";
 
     public static final String PUBLISH_CONFIG_FAILURES = "publishConfigFailures";

@@ -48,7 +48,7 @@ public class PendingTerritoryReader implements ItemReader<Territory> {
         List<Territory> territories = new ArrayList<>();
         for (TerritoryLevel level : TerritoryLevel.values()) {
             List<Territory> ofLevel = territoryRepository.findPending(level);
-            log.info("{} territory(ies) pending file generation on {}", ofLevel.size(), level.table());
+            log.debug("{} territory(ies) pending file generation on {}", ofLevel.size(), level.table());
             territories.addAll(ofLevel);
         }
         return territories;

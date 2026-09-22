@@ -3,6 +3,8 @@ package br.car.dsp_geo_file.batch.writer;
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationContextKeys;
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationExitCodes;
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationJobConfig;
+import br.car.dsp_geo_file.batch.config.GeoFileGenerationProperties;
+import br.car.dsp_geo_file.generation.GeoFileGenerationLogging;
 import br.car.dsp_geo_file.generation.GeoFileGenerationOrchestrator;
 import br.car.dsp_geo_file.territory.TerritoryFileStateRepository;
 import org.junit.jupiter.api.Test;
@@ -22,7 +24,9 @@ class TerritoryGeoFileWriterExitStatusTest {
     void afterStep_ReturnsPublishConfigErrorsWhenContextHasConfigFailures() {
         TerritoryGeoFileWriter writer = new TerritoryGeoFileWriter(
                 mock(GeoFileGenerationOrchestrator.class),
-                mock(TerritoryFileStateRepository.class));
+                mock(TerritoryFileStateRepository.class),
+                new GeoFileGenerationProperties(),
+                new GeoFileGenerationLogging(new GeoFileGenerationProperties()));
 
         StepExecution stepExecution = stepExecution();
         stepExecution.getExecutionContext().putInt(GeoFileGenerationContextKeys.FILES_PUBLISHED, 2);

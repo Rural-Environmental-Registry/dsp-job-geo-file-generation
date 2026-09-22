@@ -18,6 +18,7 @@ import br.car.dsp_geo_file.theme.DownloadThemeConfig;
 import br.car.dsp_geo_file.theme.DownloadThemesService;
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationProperties;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 
@@ -64,7 +65,7 @@ class GeoFileGenerationOrchestratorTest {
                 "FID\r\n".getBytes(StandardCharsets.UTF_8),
                 3L);
 
-        var result = orchestrator(exporter(generated)).publish(LEVEL_2);
+        var result = orchestrator(exporter(generated)).publish(LEVEL_2, progressWithFiles(1));
 
         ArgumentCaptor<Map<String, String>> metadata = ArgumentCaptor.forClass(Map.class);
         ArgumentCaptor<Path> stagingPath = ArgumentCaptor.forClass(Path.class);
@@ -89,7 +90,7 @@ class GeoFileGenerationOrchestratorTest {
         when(storage.head(key)).thenReturn(
                 Optional.of(new StoredObject(key, 10L, Instant.now(), Map.of())));
 
-        var result = orchestrator(exporter(GeneratedGeoFile.empty())).publish(LEVEL_2);
+        var result = orchestrator(exporter(GeneratedGeoFile.empty())).publish(LEVEL_2, progressWithFiles(1));
 
         verify(storage).delete(key);
         verify(storage, never()).putFile(anyString(), any(Path.class), anyString(), any());
@@ -101,7 +102,7 @@ class GeoFileGenerationOrchestratorTest {
     void publish_DoesNotDeleteWhenTheEmptyCutHasNoObject() {
         when(storage.head(anyString())).thenReturn(Optional.empty());
 
-        orchestrator(exporter(GeneratedGeoFile.empty())).publish(LEVEL_2);
+        orchestrator(exporter(GeneratedGeoFile.empty())).publish(LEVEL_2, progressWithFiles(1));
 
         verify(storage, never()).delete(anyString());
     }
@@ -112,7 +113,7 @@ class GeoFileGenerationOrchestratorTest {
         org.mockito.Mockito.doThrow(new ObjectStorageException("endpoint down", new RuntimeException()))
                 .when(storage).putFile(anyString(), any(Path.class), anyString(), any());
 
-        var result = orchestrator(exporter(generated)).publish(LEVEL_2);
+        var result = orchestrator(exporter(generated)).publish(LEVEL_2, progressWithFiles(1));
 
         assertEquals(1, result.failed());
         assertEquals(0, result.configFailures());
@@ -134,7 +135,8 @@ class GeoFileGenerationOrchestratorTest {
                 new S3ObjectKeyBuilder(),
                 stagingService(),
                 storage,
-                null).publish(LEVEL_2);
+                mock(JdbcTemplate.class),
+                generationLogging()).publish(LEVEL_2, progressWithFiles(1));
 
         assertEquals(1, result.failed());
         assertEquals(1, result.configFailures());
@@ -154,9 +156,10 @@ class GeoFileGenerationOrchestratorTest {
                 new S3ObjectKeyBuilder(),
                 stagingService(),
                 storage,
-                null);
+                mock(JdbcTemplate.class),
+                generationLogging());
 
-        var result = orchestrator.publish(LEVEL_2);
+        var result = orchestrator.publish(LEVEL_2, progressWithFiles(0));
 
         assertEquals(0, result.published());
         assertEquals(0, result.failed());
@@ -184,7 +187,31 @@ class GeoFileGenerationOrchestratorTest {
                 new S3ObjectKeyBuilder(),
                 stagingService(),
                 storage,
-                null);
+                mock(JdbcTemplate.class),
+                generationLogging());
+    }
+
+    @Test
+    void publish_RecordsPublishedCountByFormat() {
+        var result = orchestrator(new GeneratedGeoFile(new byte[]{1}, 1L))
+                .publish(LEVEL_2, progressWithFiles(1));
+
+        assertEquals(1, result.publishedByFormat().get("csv"));
+        assertTrue(result.emptiedByFormat().isEmpty());
+    }
+
+    private GeoFileGenerationOrchestrator orchestrator(GeneratedGeoFile answer) {
+        return orchestrator(exporter(answer));
+    }
+
+    private static GeoFileGenerationRunProgress progressWithFiles(int exporterBackedFiles) {
+        GeoFileGenerationRunProgress progress = new GeoFileGenerationRunProgress(1);
+        progress.startTerritory(exporterBackedFiles);
+        return progress;
+    }
+
+    private static GeoFileGenerationLogging generationLogging() {
+        return new GeoFileGenerationLogging(new GeoFileGenerationProperties());
     }
 
     private static DownloadThemeConfig theme(List<String> formats) {

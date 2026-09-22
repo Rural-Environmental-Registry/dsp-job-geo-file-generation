@@ -2,10 +2,13 @@ package br.car.dsp_geo_file.batch.writer;
 
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationContextKeys;
 import br.car.dsp_geo_file.batch.config.GeoFileGenerationExitStatusResolver;
+import br.car.dsp_geo_file.batch.config.GeoFileGenerationProperties;
+import br.car.dsp_geo_file.generation.GeoFileGenerationLogging;
 import br.car.dsp_geo_file.generation.GeoFileGenerationOrchestrator;
+import br.car.dsp_geo_file.generation.GeoFileGenerationRunProgress;
 import br.car.dsp_geo_file.territory.Territory;
 import br.car.dsp_geo_file.territory.TerritoryFileStateRepository;
-import lombok.extern.slf4j.Slf4j;
+import br.car.dsp_geo_file.territory.TerritoryLevel;
 import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.StepExecution;
 import org.springframework.batch.core.StepExecutionListener;
@@ -20,24 +23,34 @@ import org.springframework.stereotype.Component;
  * {@code requires_s3_file_regeneration = true}: republishing a file that is already correct
  * costs a cycle, serving a stale one costs the citizen wrong data.
  */
-@Slf4j
 @Component
 public class TerritoryGeoFileWriter implements ItemWriter<Territory>, StepExecutionListener {
 
     private final GeoFileGenerationOrchestrator orchestrator;
     private final TerritoryFileStateRepository territoryRepository;
+    private final GeoFileGenerationProperties properties;
+    private final GeoFileGenerationLogging generationLogging;
 
     private StepExecution stepExecution;
+    private GeoFileGenerationRunProgress runProgress;
 
     public TerritoryGeoFileWriter(GeoFileGenerationOrchestrator orchestrator,
-                                  TerritoryFileStateRepository territoryRepository) {
+                                  TerritoryFileStateRepository territoryRepository,
+                                  GeoFileGenerationProperties properties,
+                                  GeoFileGenerationLogging generationLogging) {
         this.orchestrator = orchestrator;
         this.territoryRepository = territoryRepository;
+        this.properties = properties;
+        this.generationLogging = generationLogging;
     }
 
     @Override
     public void beforeStep(StepExecution stepExecution) {
         this.stepExecution = stepExecution;
+        int pendingLevel2 = territoryRepository.countPending(TerritoryLevel.LEVEL_2);
+        int pendingLevel3 = territoryRepository.countPending(TerritoryLevel.LEVEL_3);
+        generationLogging.logGenerationQueue(pendingLevel2, pendingLevel3);
+        runProgress = new GeoFileGenerationRunProgress(pendingLevel2 + pendingLevel3);
     }
 
     @Override
@@ -49,22 +62,44 @@ public class TerritoryGeoFileWriter implements ItemWriter<Territory>, StepExecut
     @Override
     public void write(Chunk<? extends Territory> chunk) {
         for (Territory territory : chunk) {
-            var result = orchestrator.publish(territory);
+            runProgress.startTerritory(orchestrator.exporterBackedFileCount());
+            var result = orchestrator.publish(territory, runProgress);
             accumulateResult(result);
             if (result.complete()) {
                 territoryRepository.markGenerated(territory.level(), territory.id());
-                log.info("Territory {} ({}) done — {} file(s) published, {} empty cut(s)",
-                        territory.id(), territory.level(), result.published(), result.emptied());
+                generationLogging.logTerritoryDone(
+                        territory,
+                        runProgress,
+                        result.publishedByFormat(),
+                        result.emptiedByFormat(),
+                        result.configFailures(),
+                        result.transientFailures());
             } else {
-                log.error("[GEO_TERRITORY_PENDING] territory={} level={} configFailures={} "
-                                + "transientFailures={} attempts={}",
-                        territory.id(),
-                        territory.level(),
+                generationLogging.logTerritoryPending(
+                        territory,
+                        runProgress,
                         result.configFailures(),
                         result.transientFailures(),
-                        result.published() + result.emptied() + result.failed());
+                        result.filesProcessed());
             }
+            maybeLogHeartbeat();
         }
+    }
+
+    private void maybeLogHeartbeat() {
+        int every = properties.getProgressLogEveryTerritories();
+        if (every <= 0 || runProgress == null || stepExecution == null) {
+            return;
+        }
+        if (runProgress.territoryIndex() % every != 0) {
+            return;
+        }
+        var context = stepExecution.getExecutionContext();
+        generationLogging.logGenerationProgress(
+                runProgress.territoryProgress(),
+                context.getInt(GeoFileGenerationContextKeys.FILES_PROCESSED, 0),
+                context.getInt(GeoFileGenerationContextKeys.FILES_PUBLISHED, 0),
+                context.getInt(GeoFileGenerationContextKeys.FILES_EMPTIED, 0));
     }
 
     private void accumulateResult(GeoFileGenerationOrchestrator.TerritoryPublishResult result) {
@@ -78,6 +113,9 @@ public class TerritoryGeoFileWriter implements ItemWriter<Territory>, StepExecut
         context.putInt(
                 GeoFileGenerationContextKeys.FILES_EMPTIED,
                 context.getInt(GeoFileGenerationContextKeys.FILES_EMPTIED, 0) + result.emptied());
+        context.putInt(
+                GeoFileGenerationContextKeys.FILES_PROCESSED,
+                context.getInt(GeoFileGenerationContextKeys.FILES_PROCESSED, 0) + result.filesProcessed());
         if (result.complete()) {
             context.putInt(
                     GeoFileGenerationContextKeys.TERRITORIES_COMPLETED,

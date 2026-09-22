@@ -63,7 +63,7 @@ public class S3ObjectStorageClient implements ObjectStorageClient {
                     .metadata(userMetadata == null ? Map.of() : userMetadata)
                     .build();
             s3Client.putObject(request, RequestBody.fromFile(file));
-            log.info("Published {} ({} bytes) from staging to bucket {}", key, file.toFile().length(), bucket);
+            log.debug("Published {} ({} bytes) from staging to bucket {}", key, file.toFile().length(), bucket);
         } catch (RuntimeException ex) {
             throw new ObjectStorageException("Failed to publish " + key, ex);
         }
