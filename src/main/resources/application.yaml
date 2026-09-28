@@ -43,7 +43,7 @@ spring:
 dsp:
   download:
     # Same catalogue the backend reads: themes and the formats to pre-generate.
-    themes-file: file:../rer-dsp-core/config/downloads/downloadThemesConfig.json
+    themes-file: file:../dsp-core/config/downloads/downloadThemesConfig.json
   object-storage:
     # S3 API endpoint. The bucket must already exist — the job never creates it.
     endpoint: http://localhost:9000
