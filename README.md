@@ -1,7 +1,7 @@
 # rer-dsp-job-geo-file-generation
 
 > This repository is one module of the **DSP (Data Sharing Platform)**, part of the RER ecosystem.
-> Full project documentation lives in **[rer-dsp-docs](https://github.com/Rural-Environmental-Registry/rer-dsp-docs)**.
+> Full project documentation lives in **[dsp-docs](https://github.com/Rural-Environmental-Registry/dsp-docs)**.
 > The information below covers this module only, not the DSP project as a whole.
 
 ## Where this module fits in the DSP
@@ -26,7 +26,7 @@ object storage so the backend does not need to query WFS on every download.
 
 ## How it works
 
-1. Migration ([`rer-dsp-job-data-migration`](https://github.com/Rural-Environmental-Registry/rer-dsp-job-data-migration))
+1. Migration ([`dsp-job-data-migration`](https://github.com/Rural-Environmental-Registry/dsp-job-data-migration))
    sets `requires_s3_file_regeneration` on changed territories, only after finishing successfully.
 2. This job reads pending territories from `dsp.territory_level_2` / `dsp.territory_level_3`.
 3. For each territory, it walks enabled themes from `downloadThemesConfig.json` and the
@@ -84,7 +84,7 @@ Three datasources (`batch`, `target`, `geo-target`) and object storage.
 
 The `batch` datasource points to schema **`geo_file_generation`** on `dsp-db` (Spring Batch metadata
 for this job). Schema `data_migration` is exclusive to the
-[migration job](https://github.com/Rural-Environmental-Registry/rer-dsp-job-data-migration).
+[migration job](https://github.com/Rural-Environmental-Registry/dsp-job-data-migration).
 
 ```yaml
 spring:
@@ -115,3 +115,5 @@ Or, preferably, via `rer-dsp-core` (`./setup.sh`), which orchestrates the full s
 ## License
 
 [GNU General Public License v3.0](LICENSE)
+
+<small><strong>Copyright © 2026 Government of Brazil — Ministry of Management and Innovation in Public Services</strong></small>
