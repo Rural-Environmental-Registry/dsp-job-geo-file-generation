@@ -1,116 +1,86 @@
 # rer-dsp-job-geo-file-generation
 
-> This repository is one module of the **DSP (Data Sharing Platform)**, part of the RER ecosystem.
-> Full project documentation lives in **[dsp-docs](https://github.com/Rural-Environmental-Registry/dsp-docs)**.
-> The information below covers this module only, not the DSP project as a whole.
+> [!IMPORTANT]
+> This repository is one module of the **DSP (Data Sharing Platform)**, part of the RER ecosystem. Full project documentation lives in **[dsp-docs](https://github.com/Rural-Environmental-Registry/dsp-docs)**. The information below covers this module only, and only briefly.
+>
+> **[Go to the DSP documentation](https://rural-environmental-registry.github.io/dsp-docs)**
 
 ## Where this module fits in the DSP
 
 ```mermaid
 flowchart LR
-    GeoDb[(dsp-geoserver-db)]
-    DspDb[(dsp-db)]
-    Job((rer-dsp-job-geo-file-generation))
-    Storage[(Object storage - S3 API)]
+  browser["BROWSER<br/>Public map consultation."]
+  gw["GATEWAY<br/>nginx · single HTTP entry.<br/>/dsp/ · /dsp-backend/ · GeoServers."]
 
-    DspDb -- pending territories --> Job
-    GeoDb -- features --> Job
-    Job -- publish files --> Storage
-    Job -- clear flag --> DspDb
+  srcDb[("YOUR DATABASE<br/>Your organization's DB to migrate from.<br/>Source for the DSP.")]
+  jobMig["JOB-DATA-MIGRATION<br/>Spring Batch ETL.<br/>source → dsp-db + geoserver-db."]
+
+  core["CORE<br/>CONFIG · SETUP · START.<br/>Prepares DBs and orchestrates modules."]
+
+  dspDb[("DSP DB<br/>Operational: business + bbox/centroid.")]
+  gsDb[("GEOSERVER DB<br/>Full geometry dsp.*<br/>Read by both GeoServers.")]
+  objStor[("OBJECT STORAGE<br/>SeaweedFS S3.<br/>")]
+
+  be["DSP BACKEND<br/>REST API and business rules."]
+  fe["DSP FRONTEND<br/>Web platform UI.<br/>Consultation, maps, sharing."]
+
+  gsEx["GEOSERVER-EXHIBITION<br/>Publishes layers for viewing.<br/>WMS/WFS map service."]
+  gsDl["GEOSERVER-DOWNLOAD<br/>WFS for download export.<br/>Used by the backend."]
+
+  subgraph thisRepo ["This repository"]
+    jobGeo["JOB-GEO-FILE-GENERATION<br/>Pre-generates download files."]
+  end
+
+  browser --> gw
+  gw -->|/dsp/| fe
+  gw -->|/dsp-backend/| be
+  gw -->|/geoserver-exhibition/| gsEx
+
+  jobMig -->|read| srcDb
+  jobMig -->|"business + bbox/centroid"| dspDb
+  jobMig -->|"full geom"| gsDb
+  core -.config/schema/build.-> jobMig
+  core -.-> jobGeo
+  core -.-> dspDb
+  core -.-> gsDb
+  core -.-> objStor
+  core -.-> gw
+  core -.-> be
+  core -.-> fe
+  core -.-> gsEx
+  core -.-> gsDl
+
+  dspDb --> be
+  gsDb --> gsEx
+  gsDb --> gsDl
+  gsDb --> jobGeo
+  jobGeo -->|"pre-generated CSV"| objStor
+  be -->|WFS downloads| gsDl
+  be -->|CSV when available| objStor
+
+  classDef plain fill:#ffffff,color:#334155,stroke:#cbd5e1,stroke-width:1px
+  classDef here fill:#fef08a,color:#713f12,stroke:#ca8a04,stroke-width:2px
+
+  class browser,gw,srcDb,jobMig,core,dspDb,gsDb,objStor,be,fe,gsEx,gsDl plain
+  class jobGeo here
+
+  style thisRepo fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
 ```
 
 ## Purpose
 
-Pre-generate territorial download files (levels 2 and 3) and publish them to S3-compatible
-object storage so the backend does not need to query WFS on every download.
+Pre-generate territorial download files (levels 2 and 3) and publish them to S3-compatible object storage so the backend does not need to query WFS on every download.
 
-## How it works
+## Responsibilities
 
-1. Migration ([`dsp-job-data-migration`](https://github.com/Rural-Environmental-Registry/dsp-job-data-migration))
-   sets `requires_s3_file_regeneration` on changed territories, only after finishing successfully.
-2. This job reads pending territories from `dsp.territory_level_2` / `dsp.territory_level_3`.
-3. For each territory, it walks enabled themes from `downloadThemesConfig.json` and the
-   formats each theme declares.
-4. Exports the file by reading `dsp-geoserver-db` — the same database WFS reads, which keeps
-   content equivalent.
-5. Publishes at `{format}/{level}/{slug}_{theme}.{ext}` with `generated-at` (PutObject instant,
-   ISO UTC) in user metadata — the backend uses this as `lastFileGenerated`.
-6. Only when all enabled formats for the territory have been published does
-   `requires_s3_file_regeneration` go back to `false` and `last_generated_s3_file_at` get written.
-   Partial failure keeps the territory pending for the next run.
-
-If the bucket does not exist, the job logs the error, publishes nothing and exits without failing —
-flags stay on and the next run tries again.
-
-### Object key
-
-| Level | Key |
-| ----- | ----- |
-| 2 | `{format}/level-2/{level2Slug}_{themeCode}.{ext}` |
-| 3 | `{format}/level-3/{level2Slug}_{level3Slug}_{themeCode}.{ext}` |
-
-The slug comes from `name` (lowercase, no accents, rest becomes hyphens). Level 3 includes the
-parent slug because homonyms across parents are common. The API and flags still use `id`.
-
-The filename the end user downloads is **not** the object key: the backend still builds
-`{theme}_{level2}.{ext}`.
-
-### Formats
-
-**CSV** follows the WFS layout (`FID` column, attributes in table order, geometry as WKT).
-
-**GeoPackage** (`.gpkg`) is written when a theme lists `gpkg` in `formats[]`. One SQLite
-feature table per file, named after the theme code, geometry in `the_geom` (WKB from PostGIS).
-The SRID comes from the layer. When the cut has none, the geometry uses the GeoPackage undefined geographic SRS (`srs_id` 0) — the column cannot be null. Rows without
-geometry are skipped. There is no WFS fallback for this format: the backend serves the
-pre-generated object only.
-
-A further format is added by implementing `GeoFileExporter` and declaring it in the theme's
-`formats[]` — object keys and endpoints do not change.
-
-### Orphan cleanup
-
-At the end, the job lists `{format}/level-2/` and `{format}/level-3/` and deletes anything that
-does not match an existing (territory, theme, format). That is how renaming a territory stops
-serving the old file.
+- Read territories pending file regeneration from `dsp-db`
+- Export enabled themes and formats from `dsp-geoserver-db`
+- Publish the files to S3-compatible object storage
+- Clear the regeneration flag only after every enabled format for the territory is published
 
 ## Technologies
 
 Java 21, Spring Boot 3.4.2, Spring Batch, PostgreSQL/PostGIS, AWS SDK v2 (S3), Maven.
-
-## Configuration
-
-Three datasources (`batch`, `target`, `geo-target`) and object storage.
-
-The `batch` datasource points to schema **`geo_file_generation`** on `dsp-db` (Spring Batch metadata
-for this job). Schema `data_migration` is exclusive to the
-[migration job](https://github.com/Rural-Environmental-Registry/dsp-job-data-migration).
-
-```yaml
-spring:
-  datasource:
-    batch:
-      url: jdbc:postgresql://dsp-db:5432/dsp-db?currentSchema=geo_file_generation
-dsp:
-  object-storage:
-    endpoint: http://storage:9000   # S3 API endpoint
-    region: us-east-1
-    bucket: dsp-geo-files           # must exist; the job does not create it
-    access-key: ...
-    secret-key: ...
-    path-style-access: true
-```
-
-The runtime file is generated by `rer-dsp-core`
-(`config/Job-Geo-File-Generation/application/application.yaml`).
-
-## How to run
-
-```bash
-./mvnw spring-boot:run
-```
-
-Or, preferably, via `rer-dsp-core` (`./setup.sh`), which orchestrates the full stack.
 
 ## License
 
