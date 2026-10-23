@@ -22,7 +22,7 @@ Changes to pre-generated download files belong in this repository:
 - Spring Batch job under `br.car.dsp_geo_file`
 - Exporters for each file format (`GeoFileExporter`)
 - Tests under `src/test/java`
-- Job configuration in `src/main/resources/application.yaml`
+- Job configuration in `src/main/resources/application.properties` (overrides via environment in Docker)
 - This module's `README.md`
 
 The job reads territories pending regeneration from `dsp-db` and features from
@@ -97,7 +97,8 @@ Run the job:
 ./mvnw spring-boot:run
 ```
 
-That needs the three datasources in `application.yaml`, a bucket that already
+That needs the three datasources configured in `application.properties` (or via
+`SPRING_DATASOURCE_*` / `DSP_OBJECT_STORAGE_*` env vars), a bucket that already
 exists, and `dsp-geoserver-db` already filled by the migration job. The
 preferred way to run it (SeaweedFS and schedule) is `./setup.sh` in
 [dsp-core](https://github.com/Rural-Environmental-Registry/dsp-core), with the
