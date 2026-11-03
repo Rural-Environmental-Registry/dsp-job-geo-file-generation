@@ -9,6 +9,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "dsp.download")
 public class DownloadThemesProperties {
 
-    /** Same file the backend reads — the catalogue has one owner, {@code rer-dsp-core}. */
-    private String themesFile = "file:/config/downloadThemesConfig.json";
+    /**
+     * Same file the backend reads — synced into {@code config/downloads/} by dsp-core {@code ./config.sh}.
+     * Docker/Compose sets {@code DSP_DOWNLOAD_THEMES_FILE=file:/config/downloadThemesConfig.json}.
+     */
+    private String themesFile = "file:config/downloads/downloadThemesConfig.json";
 }
